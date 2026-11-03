@@ -83,6 +83,7 @@ jobs:
               "${RUNNER_TEMP}/definitions/main.cvd" \
               "${RUNNER_TEMP}/definitions/daily.cvd" \
               "${RUNNER_TEMP}/definitions/bytecode.cvd" \
+              "${RUNNER_TEMP}/definitions/"*.cvd.sign \
               "${RUNNER_TEMP}/definitions/acceptance.json"
             gh release edit "${CVD_TAG}" --draft=false --latest
           fi

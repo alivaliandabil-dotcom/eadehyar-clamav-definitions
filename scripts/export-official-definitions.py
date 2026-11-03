@@ -16,6 +16,16 @@ IMAGE = 'clamav/clamav@sha256:26509520043b68576c95e76576673d90b423fccb765dc8cba3
 FILES = ('main.cvd', 'daily.cvd', 'bytecode.cvd')
 
 
+def assert_cache_entries(directory):
+    for file in directory.iterdir():
+        signature = re.fullmatch(r'(?:main|daily|bytecode)-\d+\.cvd\.sign', file.name)
+        limit = 256 * 2**20 if file.name in FILES else 64 * 1024
+        if (file.is_symlink() or not file.is_file() or
+                (file.name not in (*FILES, 'freshclam.dat') and not signature) or
+                file.stat().st_size > limit):
+            raise ValueError('Unexpected cache entries are preserved and rejected.')
+
+
 def run(args, **options):
     return subprocess.run(args, capture_output=True, text=True, timeout=300, **options)
 
@@ -55,9 +65,7 @@ def export(output):
         if not data.is_absolute() or data.is_symlink():
             raise ValueError('An isolated absolute definition cache is required.')
         data.mkdir(mode=0o777, exist_ok=True)
-        if any(p.is_symlink() or not p.is_file() or p.name not in (*FILES, 'freshclam.dat')
-               for p in data.iterdir()):
-            raise ValueError('Unexpected cache entries are preserved and rejected.')
+        assert_cache_entries(data)
         data.chmod(0o777)
         fixtures = work / 'fixtures'
         fixtures.mkdir(mode=0o755)
@@ -115,13 +123,24 @@ def export(output):
                 '/fixtures/pattern.txt:' not in result.stdout or ' FOUND' not in result.stdout):
             raise RuntimeError('Official database load/clean/pattern acceptance failed.')
         metadata = {}
+        exported = list(FILES)
         for name in FILES:
             file = data / name
             if not file.is_file() or file.is_symlink() or not 512 < file.stat().st_size < 256 * 2**20:
                 raise ValueError('Only bounded, signed CVD database files may be exported.')
             metadata[name] = {'bytes': file.stat().st_size, 'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}
+            header = file.read_bytes()[:512].decode('ascii').split(':')
+            if header[0] != 'ClamAV-VDB' or not header[2].isdigit():
+                raise ValueError('Unexpected signed CVD header.')
+            signature_name = file.stem + '-' + header[2] + '.cvd.sign'
+            signature = data / signature_name
+            if (signature.is_symlink() or not signature.is_file() or
+                    not 1 < signature.stat().st_size <= 64 * 1024):
+                raise ValueError('Matching upstream CVD signature is required.')
+            metadata[signature_name] = {'bytes': signature.stat().st_size, 'sha256': hashlib.sha256(signature.read_bytes()).hexdigest()}
+            exported.append(signature_name)
         output.mkdir(mode=0o755)
-        for name in FILES:
+        for name in exported:
             shutil.copyfile(data / name, output / name)
         receipt = {
             'createdAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
