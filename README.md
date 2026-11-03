@@ -4,7 +4,7 @@ Infrastructure-only mirror for unmodified, signed public ClamAV CVD files. No ap
 
 ## Plan and impact (Issue 1)
 
-An isolated GitHub-hosted job uses the official digest-pinned ClamAV image and FreshClam client. It verifies database loading, rejects definitions older than 48 hours, accepts a harmless synthetic PDF and rejects the standard harmless antivirus test pattern. It publishes only `main.cvd`, `daily.cvd`, `bytecode.cvd` and `acceptance.json`. Upstream CVDs and their embedded signatures are unchanged. Upstream ownership and terms continue to apply; this mirror does not relicense them.
+An isolated GitHub-hosted job uses the official digest-pinned ClamAV image and FreshClam client. It verifies database loading, rejects definitions older than 48 hours, accepts a harmless synthetic PDF and rejects the standard harmless antivirus test pattern. It publishes only `main.cvd`, `daily.cvd`, `bytecode.cvd`, their matching upstream `.cvd.sign` files and `acceptance.json`. Upstream CVDs and their signatures are unchanged. Upstream ownership and terms continue to apply; this mirror does not relicense them. Valid bounded signature sidecars remain in the cache; unrelated files and symlinks are rejected.
 
 The scheduled job checks every six hours and caches definitions and FreshClam state, including cooldowns. It does not rotate clients or remove cooldown state after a denial. A failed update publishes nothing; the previous successful release remains. Consumer freshness and signature checks remain mandatory. Releases are retained; existing assets are not overwritten.
 
