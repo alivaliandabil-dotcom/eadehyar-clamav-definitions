@@ -1,0 +1,88 @@
+name: Verified public definition mirror
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verified-cvd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -v
+
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Restore isolated definition and cooldown state
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/cvd-cache
+          key: signed-cvd-1.5.4-${{ github.run_id }}
+          restore-keys: signed-cvd-1.5.4-
+      - name: Fetch once, verify signatures/loading and harmless fixtures
+        id: fetch
+        env:
+          CVD_CACHE_DIR: ${{ runner.temp }}/cvd-cache
+        run: python3 scripts/export-official-definitions.py "${RUNNER_TEMP}/definitions"
+      - name: Make only isolated cache readable to the cache action
+        if: always()
+        run: |
+          if [ -d "${RUNNER_TEMP}/cvd-cache" ]; then
+            sudo chown -R "$(id -u):$(id -g)" "${RUNNER_TEMP}/cvd-cache"
+          fi
+      - name: Retain update/cooldown state even after a rejected attempt
+        if: always()
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/cvd-cache
+          key: signed-cvd-1.5.4-${{ github.run_id }}
+      - name: Resolve content-bound release identity
+        id: identity
+        run: |
+          python3 - <<'PY' >> "${GITHUB_OUTPUT}"
+          import os, pathlib, json, hashlib
+          p = pathlib.Path(os.environ['RUNNER_TEMP']) / 'definitions/acceptance.json'
+          receipt = json.loads(p.read_text())
+          digest = hashlib.sha256(json.dumps(receipt['files'],sort_keys=True).encode()).hexdigest()[:12]
+          version = receipt['version'].split('/')[1]
+          assert version.isdigit()
+          print('tag=cvd-' + version + '-' + digest)
+          PY
+      - name: Publish only unchanged public CVDs and verification receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CVD_TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "${CVD_TAG}" --json isDraft > "${RUNNER_TEMP}/existing-release.json" 2>/dev/null; then
+            python3 -c 'import json,sys; assert not json.load(open(sys.argv[1]))["isDraft"], "Incomplete prior release preserved; review required"' "${RUNNER_TEMP}/existing-release.json"
+          else
+            gh release create "${CVD_TAG}" --draft --target "${GITHUB_SHA}" \
+              --title "Verified signed definitions ${CVD_TAG}" \
+              --notes 'Unmodified public ClamAV CVDs, official FreshClam verification, current definitions and harmless clean/pattern acceptance. No application files or credentials.' \
+              "${RUNNER_TEMP}/definitions/main.cvd" \
+              "${RUNNER_TEMP}/definitions/daily.cvd" \
+              "${RUNNER_TEMP}/definitions/bytecode.cvd" \
+              "${RUNNER_TEMP}/definitions/acceptance.json"
+            gh release edit "${CVD_TAG}" --draft=false --latest
+          fi
